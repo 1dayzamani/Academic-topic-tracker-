@@ -1,0 +1,17 @@
+# Roll Call for Topics
+
+A tool for teachers: snap photos of class notes, extract topics automatically, check off what was actually taught, then generate a matching exam — with separate student and answer-key versions.
+
+## Setup
+
+1. Create accounts on Anthropic (console.anthropic.com), Supabase, and Vercel.
+2. In Supabase, run the SQL below to create the database table.
+3. In Vercel, import this repo and add the three environment variables from `.env.example`.
+4. Deploy.
+
+## Database setup (run in Supabase SQL Editor)
+
+\`\`\`sql
+create table saved_exams (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references
