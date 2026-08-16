@@ -1,0 +1,270 @@
+import { useEffect, useRef, useState } from "react";
+import {
+  Archive, Camera, Check, ClipboardList, Download, LogOut,
+  Loader2, Pencil, Printer, Save, Share2, Sparkles, Trash2, X,
+} from "lucide-react";
+import { supabase } from "./supabaseClient";
+
+const INK = "#1B2A4A";
+const PAPER = "#FAF8F3";
+const RED = "#B0272D";
+const GRAPHITE = "#5B6270";
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(",")[1]);
+    r.onerror = () => reject(new Error("Read failed"));
+    r.readAsDataURL(file);
+  });
+}
+
+function AuthScreen() {
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState("");
+
+  const signIn = async () => {
+    setError("");
+    const { error } = await supabase.auth.signInWithOtp({ email });
+    if (error) setError(error.message);
+    else setSent(true);
+  };
+
+  return (
+    <div style={{ background: PAPER, minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Inter', system-ui, sans-serif" }}>
+      <div style={{ background: "#fff", border: "1px solid rgba(27,42,74,0.12)" }} className="rounded-md p-8 w-full max-w-sm">
+        <h1 className="display text-xl font-semibold mb-1" style={{ color: INK }}>Roll Call for Topics</h1>
+        <p style={{ color: GRAPHITE }} className="text-xs mb-5">Sign in with your email — no password needed.</p>
+        {sent ? (
+          <p className="text-sm" style={{ color: INK }}>Check your email for a sign-in link.</p>
+        ) : (
+          <>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@school.edu"
+              className="w-full text-sm p-2.5 rounded border outline-none mb-3"
+              style={{ borderColor: "rgba(27,42,74,0.2)" }}
+            />
+            <button onClick={signIn} disabled={!email} style={{ background: INK, color: PAPER }} className="w-full py-2.5 rounded text-sm font-medium">
+              Send sign-in link
+            </button>
+            {error && <p className="text-xs mt-2" style={{ color: RED }}>{error}</p>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [session, setSession] = useState(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setCheckingSession(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  if (checkingSession) return null;
+  if (!session) return <AuthScreen />;
+  return <TopicTracker userId={session.user.id} />;
+}
+
+function TopicTracker({ userId }) {
+  const [notes, setNotes] = useState("");
+  const [images, setImages] = useState([]);
+  const [topics, setTopics] = useState([]);
+  const [checked, setChecked] = useState({});
+  const [extracting, setExtracting] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [questions, setQuestions] = useState([]);
+  const [qType, setQType] = useState("Mixed");
+  const [error, setError] = useState("");
+  const [examTitle, setExamTitle] = useState("");
+  const [printMode, setPrintMode] = useState(null);
+  const [savedExams, setSavedExams] = useState([]);
+  const [loadingSaved, setLoadingSaved] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedNotice, setSavedNotice] = useState("");
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase
+        .from("saved_exams")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+      if (!error && data) setSavedExams(data);
+      setLoadingSaved(false);
+    })();
+  }, [userId]);
+
+  const handleFiles = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+    setError("");
+    const newImages = [];
+    for (const file of files) {
+      try {
+        const base64 = await fileToBase64(file);
+        newImages.push({
+          id: `${file.name}-${Date.now()}-${Math.random()}`,
+          previewUrl: URL.createObjectURL(file),
+          base64,
+          mediaType: file.type || "image/jpeg",
+        });
+      } catch (e) {}
+    }
+    setImages((prev) => [...prev, ...newImages]);
+  };
+
+  const removeImage = (id) => setImages((prev) => prev.filter((img) => img.id !== id));
+
+  const extractTopics = async () => {
+    if (!notes.trim() && images.length === 0) return;
+    setExtracting(true);
+    setError("");
+    setQuestions([]);
+    try {
+      const instruction = `You are helping a K-12 teacher figure out which subjects/topics were covered in class, using photos of their handwritten or typed notes${
+        notes.trim() ? " (plus some typed notes below)" : ""
+      }. Read everything provided, including any photos, and return ONLY a JSON array of short topic strings (3-8 words each). No preamble, no markdown.${
+        notes.trim() ? `\n\nTYPED NOTES:\n"""${notes}"""` : ""
+      }`;
+      const content = [{ type: "text", text: instruction }];
+      images.forEach((img) => {
+        content.push({ type: "image", source: { type: "base64", media_type: img.mediaType, data: img.base64 } });
+      });
+
+      const res = await fetch("/api/extract-topics", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      const { topics: parsed } = await res.json();
+      setTopics(parsed);
+      const initChecked = {};
+      parsed.forEach((t) => (initChecked[t] = true));
+      setChecked(initChecked);
+    } catch (e) {
+      setError("Couldn't read topics from that. Try a clearer photo or add typed detail.");
+    }
+    setExtracting(false);
+  };
+
+  const toggleTopic = (t) => setChecked((c) => ({ ...c, [t]: !c[t] }));
+
+  const generateQuestions = async () => {
+    const covered = topics.filter((t) => checked[t]);
+    if (covered.length === 0) return;
+    setGenerating(true);
+    setError("");
+    try {
+      const res = await fetch("/api/generate-questions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topics: covered, qType }),
+      });
+      const { questions: parsed } = await res.json();
+      setQuestions(parsed);
+    } catch (e) {
+      setError("Couldn't generate questions just now. Try again.");
+    }
+    setGenerating(false);
+  };
+
+  const coveredCount = topics.filter((t) => checked[t]).length;
+  const canExtract = notes.trim() || images.length > 0;
+
+  const doPrint = (mode) => {
+    setPrintMode(mode);
+    setTimeout(() => {
+      window.print();
+      setPrintMode(null);
+    }, 50);
+  };
+
+  const filenameBase = (examTitle || "exam").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || "exam";
+
+  const downloadBlob = (blob, filename) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const buildWordHtml = (mode) => {
+    const rows = questions
+      .map((q, i) => {
+        const answerRow = mode === "key"
+          ? `<p style="font-size:12px;color:#333;margin:2px 0 10px;"><b>Answer:</b> ${q.answer}</p>`
+          : `<p style="border-bottom:1px solid #999;height:20px;margin:2px 0 14px;">&nbsp;</p>`;
+        return `<p style="margin-bottom:4px;">${i + 1}. ${q.question}</p>${answerRow}`;
+      })
+      .join("");
+    const header = mode === "student"
+      ? `<p style="font-size:12px;text-align:right;">Name: ______________________<br/>Date: ______________________</p>`
+      : `<p style="font-size:12px;color:#666;">Answer key</p>`;
+    return `<html><head><meta charset="utf-8"><title>${examTitle || "Exam"}</title></head>
+      <body style="font-family:Arial, sans-serif;">
+        <h2 style="border-bottom:2px solid #111;padding-bottom:6px;">${examTitle || "Exam"}</h2>
+        ${header}${rows}
+      </body></html>`;
+  };
+
+  const downloadWord = (mode) => {
+    const blob = new Blob(["\ufeff", buildWordHtml(mode)], { type: "application/msword" });
+    downloadBlob(blob, `${filenameBase}-${mode}.doc`);
+  };
+
+  const saveCurrentExam = async () => {
+    if (questions.length === 0) return;
+    setSaving(true);
+    const { data, error } = await supabase
+      .from("saved_exams")
+      .insert({
+        user_id: userId,
+        title: examTitle || "Untitled exam",
+        questions,
+        topics: topics.filter((t) => checked[t]),
+      })
+      .select()
+      .single();
+    if (!error && data) {
+      setSavedExams((prev) => [data, ...prev]);
+      setSavedNotice("Saved to your account.");
+      setTimeout(() => setSavedNotice(""), 2500);
+    } else {
+      setError("Couldn't save right now.");
+    }
+    setSaving(false);
+  };
+
+  const loadExam = (entry) => {
+    setExamTitle(entry.title === "Untitled exam" ? "" : entry.title);
+    setQuestions(entry.questions);
+    setTopics(entry.topics);
+    const c = {};
+    entry.topics.forEach((t) => (c[t] = true));
+    setChecked(c);
+  };
+
+  const deleteExam = async (id) => {
+    await supabase.from("saved_exams").delete().eq("id", id);
+    setSavedExams((prev) => prev.filter((e) => e.id !== id));
+  };
+
+  if (printMode) {
+    return (
