@@ -1,4 +1,4 @@
-@import url(@tailwind base;
+@tailwind base;
 @tailwind components;
 @tailwind utilities;
 
@@ -7,4 +7,4 @@
 * { box-sizing: border-box; }
 body { margin: 0; font-family: 'Inter', system-ui, sans-serif; }
 .display { font-family: 'Lora', Georgia, serif; }
-button { cursor: pointer; font-family: inherit; }https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=Inter:wght@400;500;600&disp
+button { cursor: pointer; font-family: inherit; }
